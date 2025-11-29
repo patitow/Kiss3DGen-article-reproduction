@@ -148,10 +148,18 @@ def _get_plugin():
         # Para CUDA 12.x, adicionar flags adicionais
         cuda_home = os.environ.get('CUDA_HOME') or os.environ.get('CUDA_PATH', '')
         if cuda_home and '12.' in cuda_home:
-            print(f"[INFO] CUDA 12.x detectado ({cuda_home}), usando flags especiais para VS 2022")
-            # Adicionar flags para suprimir warnings do compilador
+            print(f"[INFO] CUDA 12.x detectado ({cuda_home}), usando flags especiais para VS 2019")
+            # Adicionar flags para suprimir warnings do compilador e garantir compatibilidade VS 2019
             if '-Xcompiler' not in ' '.join(cuda_opts):
-                cuda_opts.extend(['-Xcompiler', '/wd4624', '-Xcompiler', '/wd4068'])
+                cuda_opts.extend(['-Xcompiler', '/wd4624', '-Xcompiler', '/wd4068', '-Xcompiler', '/wd4067'])
+            # Garantir que flag de compatibilidade está presente
+            if '-allow-unsupported-compiler' not in cuda_opts:
+                cuda_opts.insert(0, '-allow-unsupported-compiler')
+        elif cuda_home and '11.' in cuda_home:
+            print(f"[INFO] CUDA 11.x detectado ({cuda_home}), usando flags para VS 2019")
+            # CUDA 11.8 é compatível com VS 2019, mas pode precisar do flag
+            if '-allow-unsupported-compiler' not in cuda_opts:
+                cuda_opts.insert(0, '-allow-unsupported-compiler')
         
         print(f"[INFO] Compilando renderutils_plugin com flags: {cuda_opts[:5]}...")  # Mostrar primeiros flags
         
