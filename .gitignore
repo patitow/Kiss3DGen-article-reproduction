@@ -1,0 +1,153 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+mesh3d-generator-py3.11/
+*.pyenv
+
+# Poetry
+poetry.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Data and Models
+data/
+models/
+checkpoints/
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.bin
+*.h5
+*.hdf5
+*.onnx
+*.pb
+
+# Outputs
+outputs/
+results/
+logs/
+*.log
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.obj
+*.glb
+*.gltf
+*.mtl
+*.ply
+*.stl
+*.fbx
+*.dae
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.local
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.cache
+.cache/
+
+# Kiss3DGen (repositorio externo - nao commitar)
+Kiss3DGen/
+!Kiss3DGen/README.md
+!Kiss3DGen/LICENSE.txt
+
+# HuggingFace cache
+.cache/
+huggingface/
+.huggingface/
+
+# Modelos baixados
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.bin
+checkpoint/
+checkpoints/
+
+# Arquivos grandes
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+
+# Arquivos de sistema
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# IDEs
+.vscode/
+.idea/
+*.sublime-*
+
+# Arquivos de compilacao
+*.o
+*.a
+*.lib
+*.dll
+*.dylib
+*.exe
+build/
+dist/
+
+# Arquivos de teste
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Arquivos de ambiente
+.env
+.env.local
+.env.*.local
+
+
