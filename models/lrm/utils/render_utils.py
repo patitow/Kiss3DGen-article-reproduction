@@ -12,7 +12,14 @@ import numpy as np
 import torch
 import nvdiffrast.torch as dr
 import imageio
-imageio.plugins.freeimage.download()
+
+# Tentar baixar freeimage, mas nao falhar se nao conseguir
+try:
+    imageio.plugins.freeimage.download()
+except Exception as e:
+    # Se ja estiver instalado ou houver erro de rede, continuar
+    pass
+
 os.environ["OPENCV_IO_ENABLE_OPENEXR"]="1"
 #----------------------------------------------------------------------------
 # Vector operations

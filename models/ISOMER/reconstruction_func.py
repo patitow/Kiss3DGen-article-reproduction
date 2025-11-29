@@ -32,6 +32,7 @@ def reconstruction(
     start_edge_len_stage2=0.02,
     end_edge_len_stage2=0.005,
     expansion_weight_stage2=0.0,
+    device=None,  # Auto-detect if None
 ):
     
     if init_type == "file":
@@ -54,6 +55,15 @@ def reconstruction(
 
     normal_pils = [Image.fromarray((normal_pil.cpu()*255).numpy().astype(np.uint8)) for normal_pil in normal_pils_rgba]
 
+    # Use GPU device for pytorch3d operations (no CPU fallback)
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
+    # Convert init_verts and init_faces to CPU if device is CPU
+    if device == 'cpu' and init_verts is not None:
+        init_verts = init_verts.cpu() if isinstance(init_verts, torch.Tensor) else init_verts
+    if device == 'cpu' and init_faces is not None:
+        init_faces = init_faces.cpu() if isinstance(init_faces, torch.Tensor) else init_faces
 
     meshes = reconstruction_pipe(
         normal_pils=normal_pils, 
@@ -79,6 +89,7 @@ def reconstruction(
         expansion_weight_stage2=expansion_weight_stage2,
         init_verts=init_verts,
         init_faces=init_faces,
+        device=device,  # Pass device parameter
 
     )
 

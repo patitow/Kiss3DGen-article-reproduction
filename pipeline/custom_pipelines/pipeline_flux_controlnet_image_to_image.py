@@ -560,14 +560,11 @@ class FluxControlNetImg2ImgPipeline(DiffusionPipeline, FluxLoraLoaderMixin, From
                 f" size of {batch_size}. Make sure the batch size matches the length of the generators."
             )
 
-        # VAE applies 8x compression on images but we must also account for packing which requires
-        # latent height and width to be divisible by 2.
-        height = 2 * (int(height) // (self.vae_scale_factor * 2))
-        width = 2 * (int(width) // (self.vae_scale_factor * 2))
-        shape = (batch_size, num_channels_latents, height, width)
-        latent_image_ids = self._prepare_latent_image_ids(batch_size, height // 2, width // 2, device, dtype)
-
         if latents is not None:
+            latent_height, latent_width = latents.shape[-2:]
+            latent_image_ids = self._prepare_latent_image_ids(
+                batch_size, latent_height // 2, latent_width // 2, device, dtype
+            )
             return latents.to(device=device, dtype=dtype), latent_image_ids
 
         image = image.to(device=device, dtype=dtype)
@@ -583,9 +580,14 @@ class FluxControlNetImg2ImgPipeline(DiffusionPipeline, FluxLoraLoaderMixin, From
         else:
             image_latents = torch.cat([image_latents], dim=0)
 
-        noise = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
+        latent_height, latent_width = image_latents.shape[-2:]
+        latent_image_ids = self._prepare_latent_image_ids(
+            batch_size, latent_height // 2, latent_width // 2, device, dtype
+        )
+
+        noise = randn_tensor(image_latents.shape, generator=generator, device=device, dtype=dtype)
         latents = self.scheduler.scale_noise(image_latents, timestep, noise)
-        latents = self._pack_latents(latents, batch_size, num_channels_latents, height, width)
+        latents = self._pack_latents(latents, batch_size, num_channels_latents, latent_height, latent_width)
         return latents, latent_image_ids
 
     # Copied from diffusers.pipelines.controlnet_sd3.pipeline_stable_diffusion_3_controlnet.StableDiffusion3ControlNetPipeline.prepare_image

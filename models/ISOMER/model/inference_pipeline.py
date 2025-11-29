@@ -48,6 +48,7 @@ def reconstruction_pipe(normal_pils,
                     fovy=None,
                     radius=None,
                     ortho_dist=1.1,
+                    device="cuda",  # Add device parameter
                     camera_angles_azi=None,
                     camera_angles_ele=None,
                     rm_bkg=False,
@@ -112,7 +113,7 @@ def reconstruction_pipe(normal_pils,
     if normal_rotation_R is not None:
         normal_pils_rotated = []
         for i in range(len(normal_pils)):
-            rotated_ = rotate_normal_R(normal_pils[i], normal_rotation_R, save_addr="", device="cuda")
+            rotated_ = rotate_normal_R(normal_pils[i], normal_rotation_R, save_addr="", device=device)
             normal_pils_rotated.append(rotated_)
         
         normal_pils = normal_pils_rotated
@@ -139,7 +140,7 @@ def reconstruction_pipe(normal_pils,
         # add texture just in case
         num_meshes = len(meshes)
         num_verts_per_mesh = meshes.verts_packed().shape[0] // num_meshes
-        black_texture = torch.zeros((num_meshes, num_verts_per_mesh, 3), device="cuda")
+        black_texture = torch.zeros((num_meshes, num_verts_per_mesh, 3), device=device)
         textures = TexturesVertex(verts_features=black_texture)
         meshes.textures = textures
 
@@ -147,25 +148,25 @@ def reconstruction_pipe(normal_pils,
         assert init_mesh_from_file or (init_verts is not None and init_faces is not None), f"init_mesh_from_file ({init_mesh_from_file}) should not be None when init_type is 'file', else init_verts and init_faces should not be None"
 
         if init_verts is not None and init_faces is not None:
-            meshes = Meshes(verts=[init_verts], faces=[init_faces]).to('cuda')
+            meshes = Meshes(verts=[init_verts], faces=[init_faces]).to(device)
         elif init_mesh_from_file.endswith('.glb'):
-            meshes = load_glb(init_mesh_from_file).to('cuda')
+            meshes = load_glb(init_mesh_from_file).to(device)
         else:
-            meshes = load_obj_with_verts_faces(init_mesh_from_file).to('cuda')
+            meshes = load_obj_with_verts_faces(init_mesh_from_file).to(device)
 
         # add texture just in case
         num_meshes = len(meshes)
         num_verts_per_mesh = meshes.verts_packed().shape[0] // num_meshes
-        black_texture = torch.zeros((num_meshes, num_verts_per_mesh, 3), device="cuda")
+        black_texture = torch.zeros((num_meshes, num_verts_per_mesh, 3), device=device)
         textures = TexturesVertex(verts_features=black_texture)
         meshes.textures = textures
 
     if projection_type == 'perspective':
         assert fovy is not None and radius is not None, f"fovy ({fovy}) and radius ({radius}) should not be None when projection_type is 'perspective'"
-        cameras = get_cameras_list_azi_ele(camera_angles_azi, camera_angles_ele, fov_in_degrees=fovy,device="cuda", dist=radius, cam_type='fov')
+        cameras = get_cameras_list_azi_ele(camera_angles_azi, camera_angles_ele, fov_in_degrees=fovy, device=device, dist=radius, cam_type='fov')
 
     elif projection_type == 'orthographic':
-        cameras = get_cameras_list_azi_ele(camera_angles_azi, camera_angles_ele, fov_in_degrees=fovy, device="cuda", focal=1., dist=ortho_dist, cam_type='orthographic')
+        cameras = get_cameras_list_azi_ele(camera_angles_azi, camera_angles_ele, fov_in_degrees=fovy, device=device, focal=1., dist=ortho_dist, cam_type='orthographic')
 
     vertices, faces = meshes.verts_list()[0], meshes.faces_list()[0]
     
@@ -184,6 +185,6 @@ def reconstruction_pipe(normal_pils,
     if train_stage2:
         vertices, faces = run_mesh_refine(vertices, faces, normal_pils, mv=mv, proj=proj, weights=weights, steps=stage2_steps, start_edge_len=start_edge_len_stage2, end_edge_len=end_edge_len_stage2, decay=0.99, update_normal_interval=20, update_warmup=5, return_mesh=False, process_inputs=False, process_outputs=False, cameras=cameras, use_remesh=use_remesh_stage2, loss_expansion_weight=expansion_weight_stage2)
 
-    meshes = simple_clean_mesh(to_pyml_mesh(vertices, faces), apply_smooth=True, stepsmoothnum=1, apply_sub_divide=True, sub_divide_threshold=0.25).to("cuda")
+    meshes = simple_clean_mesh(to_pyml_mesh(vertices, faces), apply_smooth=True, stepsmoothnum=1, apply_sub_divide=True, sub_divide_threshold=0.25).to(device)
 
     return meshes

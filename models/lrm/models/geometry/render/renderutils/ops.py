@@ -30,20 +30,66 @@ def _get_plugin():
     if os.name == 'nt':
         def find_cl_path():
             import glob
-            for edition in ['Enterprise', 'Professional', 'BuildTools', 'Community']:
-                paths = sorted(glob.glob(r"C:\Program Files (x86)\Microsoft Visual Studio\*\%s\VC\Tools\MSVC\*\bin\Hostx64\x64" % edition), reverse=True)
+            # OBRIGATÓRIO: Priorizar VS 2019 (compatível com CUDA 12.1) - NÃO usar VS 2022
+            search_paths = [
+                # VS 2019 - PRIORIDADE MÁXIMA
+                r"C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Tools\MSVC\*\bin\Hostx64\x64",
+                r"C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Tools\MSVC\*\bin\Hostx64\x64",
+                r"C:\Program Files (x86)\Microsoft Visual Studio\2019\Professional\VC\Tools\MSVC\*\bin\Hostx64\x64",
+                r"C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Tools\MSVC\*\bin\Hostx64\x64",
+                r"C:\Program Files\Microsoft Visual Studio\2019\BuildTools\VC\Tools\MSVC\*\bin\Hostx64\x64",
+                r"C:\Program Files\Microsoft Visual Studio\2019\Community\VC\Tools\MSVC\*\bin\Hostx64\x64",
+                r"C:\Program Files\Microsoft Visual Studio\2019\Professional\VC\Tools\MSVC\*\bin\Hostx64\x64",
+                r"C:\Program Files\Microsoft Visual Studio\2019\Enterprise\VC\Tools\MSVC\*\bin\Hostx64\x64",
+                # Fallback genérico VS 2019 (se caminho específico não funcionar)
+                r"C:\Program Files (x86)\Microsoft Visual Studio\2019\*\VC\Tools\MSVC\*\bin\Hostx64\x64",
+                r"C:\Program Files\Microsoft Visual Studio\2019\*\VC\Tools\MSVC\*\bin\Hostx64\x64",
+            ]
+            for search_path in search_paths:
+                paths = sorted(glob.glob(search_path), reverse=True)
                 if paths:
+                    print(f"[INFO] VS 2019 encontrado: {paths[0]}")
                     return paths[0]
+            print("[ERRO] VS 2019 não encontrado! CUDA 12.1 requer VS 2019.")
+            return None
 
         # If cl.exe is not on path, try to find it.
-        if os.system("where cl.exe >nul 2>nul") != 0:
-            cl_path = find_cl_path()
-            if cl_path is None:
-                raise RuntimeError("Could not locate a supported Microsoft Visual C++ installation")
-            os.environ['PATH'] += ';' + cl_path
+        # FORÇAR uso de VS 2019 para CUDA 12.1
+        cl_path = find_cl_path()
+        if cl_path is None:
+            # Tentar verificar se cl.exe já está no PATH
+            if os.system("where cl.exe >nul 2>nul") != 0:
+                raise RuntimeError("VS 2019 não encontrado! CUDA 12.1 requer Visual Studio 2019. "
+                                 "Instale VS 2019 Build Tools ou Community.")
+            else:
+                print("[AVISO] cl.exe encontrado no PATH, mas VS 2019 não detectado explicitamente")
+        else:
+            # Garantir que VS 2019 está no início do PATH
+            current_path = os.environ.get('PATH', '')
+            if cl_path not in current_path:
+                os.environ['PATH'] = cl_path + ';' + current_path
+                print(f"[INFO] VS 2019 adicionado ao INÍCIO do PATH: {cl_path}")
+            else:
+                # Mover para o início se já estiver
+                path_parts = [p for p in current_path.split(';') if p]
+                if cl_path in path_parts:
+                    path_parts.remove(cl_path)
+                os.environ['PATH'] = cl_path + ';' + ';'.join(path_parts)
+                print(f"[INFO] VS 2019 movido para INÍCIO do PATH: {cl_path}")
 
     # Compiler options.
     opts = ['-DNVDR_TORCH']
+    
+    # CUDA-specific compiler options
+    cuda_opts = ['-DNVDR_TORCH']
+    
+    # Windows-specific: Add flags to allow unsupported compiler (VS 2022 with CUDA 12.1)
+    # CUDA 12.1 pode reclamar de VS 2022 mesmo sendo suportado - forçar flag
+    if os.name == 'nt':
+        # CRÍTICO: Adicionar flag ANTES de qualquer outra coisa para garantir que seja aplicado
+        if '-allow-unsupported-compiler' not in cuda_opts:
+            cuda_opts.insert(0, '-allow-unsupported-compiler')  # Inserir no início
+        print("[INFO] Adicionando flag -allow-unsupported-compiler para compatibilidade VS 2022 + CUDA 12.1")
 
     # Linker options.
     if os.name == 'posix':
@@ -63,7 +109,23 @@ def _get_plugin():
     ]
 
     # Some containers set this to contain old architectures that won't compile. We only need the one installed in the machine.
+    # Limpar TORCH_CUDA_ARCH_LIST para permitir auto-detecção pelo PyTorch
+    if 'TORCH_CUDA_ARCH_LIST' in os.environ:
+        old_arch = os.environ['TORCH_CUDA_ARCH_LIST']
+        if old_arch and old_arch.strip():
+            print(f"[INFO] Limpando TORCH_CUDA_ARCH_LIST (era: '{old_arch}') para auto-detecção")
     os.environ['TORCH_CUDA_ARCH_LIST'] = ''
+    
+    # Garantir que CUDA_HOME está configurado corretamente
+    cuda_home = os.environ.get('CUDA_HOME') or os.environ.get('CUDA_PATH')
+    if cuda_home:
+        print(f"[INFO] renderutils_plugin: Usando CUDA_HOME={cuda_home}")
+        # Verificar se nvcc existe
+        nvcc_path = os.path.join(cuda_home, 'bin', 'nvcc.exe' if os.name == 'nt' else 'nvcc')
+        if not os.path.exists(nvcc_path):
+            print(f"[AVISO] nvcc não encontrado em {nvcc_path}")
+    else:
+        print("[AVISO] CUDA_HOME não configurado. PyTorch tentará detectar automaticamente.")
 
     # Try to detect if a stray lock file is left in cache directory and show a warning. This sometimes happens on Windows if the build is interrupted at just the right moment.
     try:
@@ -75,13 +137,63 @@ def _get_plugin():
 
     # Compile and load.
     source_paths = [os.path.join(os.path.dirname(__file__), fn) for fn in source_files]
-    torch.utils.cpp_extension.load(name='renderutils_plugin', sources=source_paths, extra_cflags=opts,
-         extra_cuda_cflags=opts, extra_ldflags=ldflags, with_cuda=True, verbose=True)
+    
+    # Tentar compilar com tratamento de erro robusto
+    try:
+        # Garantir que flag está presente (já adicionado acima, mas verificar novamente)
+        if '-allow-unsupported-compiler' not in cuda_opts:
+            cuda_opts.insert(0, '-allow-unsupported-compiler')
+            print("[INFO] Flag -allow-unsupported-compiler adicionado antes da compilação")
+        
+        # Para CUDA 12.x, adicionar flags adicionais
+        cuda_home = os.environ.get('CUDA_HOME') or os.environ.get('CUDA_PATH', '')
+        if cuda_home and '12.' in cuda_home:
+            print(f"[INFO] CUDA 12.x detectado ({cuda_home}), usando flags especiais para VS 2022")
+            # Adicionar flags para suprimir warnings do compilador
+            if '-Xcompiler' not in ' '.join(cuda_opts):
+                cuda_opts.extend(['-Xcompiler', '/wd4624', '-Xcompiler', '/wd4068'])
+        
+        print(f"[INFO] Compilando renderutils_plugin com flags: {cuda_opts[:5]}...")  # Mostrar primeiros flags
+        
+        torch.utils.cpp_extension.load(name='renderutils_plugin', sources=source_paths, extra_cflags=opts,
+             extra_cuda_cflags=cuda_opts, extra_ldflags=ldflags, with_cuda=True, verbose=True)
 
-    # Import, cache, and return the compiled module.
-    import renderutils_plugin
-    _cached_plugin = renderutils_plugin
-    return _cached_plugin
+        # Import, cache, and return the compiled module.
+        import renderutils_plugin
+        _cached_plugin = renderutils_plugin
+        return _cached_plugin
+    except Exception as e:
+        error_msg = str(e)
+        print(f"[ERRO] Falha ao compilar renderutils_plugin: {error_msg}")
+        
+        # Se o erro for relacionado a compilação CUDA, tentar limpar cache e recompilar
+        if 'Error building extension' in error_msg or 'ninja' in error_msg.lower():
+            print("[INFO] Tentando limpar cache de compilação e recompilar...")
+            try:
+                build_dir = torch.utils.cpp_extension._get_build_directory('renderutils_plugin', False)
+                if os.path.exists(build_dir):
+                    import shutil
+                    print(f"[INFO] Removendo diretório de build: {build_dir}")
+                    shutil.rmtree(build_dir, ignore_errors=True)
+                
+                # Tentar novamente com flags mais agressivos
+                if '-allow-unsupported-compiler' not in cuda_opts:
+                    cuda_opts.append('-allow-unsupported-compiler')
+                
+                torch.utils.cpp_extension.load(name='renderutils_plugin', sources=source_paths, extra_cflags=opts,
+                     extra_cuda_cflags=cuda_opts, extra_ldflags=ldflags, with_cuda=True, verbose=True)
+                
+                import renderutils_plugin
+                _cached_plugin = renderutils_plugin
+                return _cached_plugin
+            except Exception as e2:
+                print(f"[ERRO] Recompilação também falhou: {e2}")
+                print("[AVISO] renderutils_plugin não disponível. Pipeline usará fallback CPU.")
+                raise RuntimeError(f"Não foi possível compilar renderutils_plugin. Erro: {e2}. "
+                                 f"Pipeline requer esta extensão para renderização GPU. "
+                                 f"Verifique se Visual Studio Build Tools está instalado corretamente.")
+        
+        raise
 
 #----------------------------------------------------------------------------
 # Internal kernels, just used for testing functionality

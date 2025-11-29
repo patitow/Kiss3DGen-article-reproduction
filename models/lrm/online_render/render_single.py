@@ -44,18 +44,31 @@ def sample_spherical(phi, theta, cam_radius):
 
 def load_mipmap(env_path):
     diffuse_path = os.path.join(env_path, "diffuse.pth")
-    diffuse = torch.load(diffuse_path, map_location=torch.device('cpu'))
+    diffuse = torch.load(diffuse_path, map_location=torch.device('cpu'), weights_only=True)
 
     specular = []
     for i in range(6):
         specular_path = os.path.join(env_path, f"specular_{i}.pth")
-        specular_tensor = torch.load(specular_path, map_location=torch.device('cpu'))
+        specular_tensor = torch.load(specular_path, map_location=torch.device('cpu'), weights_only=True)
         specular.append(specular_tensor)
     return [specular, diffuse]
 
 ENV = load_mipmap("models/lrm/env_mipmap/6")
 materials = (0.0,0.9)
-GLCTX = dr.RasterizeCudaContext()
+GLCTX = None  # Inicializar sob demanda
+
+def get_glctx():
+    """Obtem ou cria o contexto GLCTX sob demanda"""
+    global GLCTX
+    if GLCTX is None:
+        try:
+            GLCTX = dr.RasterizeCudaContext()
+        except Exception as e:
+            print(f"[AVISO] Falha ao criar RasterizeCudaContext: {e}")
+            print("[AVISO] Tentando continuar sem nvdiffrast...")
+            # Retornar None se falhar - o código precisa lidar com isso
+            GLCTX = None
+    return GLCTX
 
 def random_scene():
     train_res = [512, 512]
@@ -136,7 +149,10 @@ def rendering(ref_mesh, fov=30, radius=4.5, azimuths=[0, 90, 180, 270], elevatio
         campos = all_campos[i]
 
         with torch.no_grad():
-            buffer_dict = render.render_mesh(GLCTX, ref_mesh, mvp, campos, [ENV], None, None, 
+            glctx = get_glctx()
+            if glctx is None:
+                raise RuntimeError("nvdiffrast nao disponivel - GLCTX nao pode ser criado")
+            buffer_dict = render.render_mesh(glctx, ref_mesh, mvp, campos, [ENV], None, None, 
                                             materials, iter_res, spp=iter_spp, num_layers=layers, msaa=True, 
                                             background=None, gt_render=True)
         image = buffer_dict['shaded'][0]

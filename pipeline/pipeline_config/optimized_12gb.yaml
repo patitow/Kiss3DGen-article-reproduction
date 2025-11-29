@@ -1,0 +1,59 @@
+# Config otimizado para GPUs com 12GB de VRAM
+# - Quantização fp16 para todos os modelos
+# - CPU offload habilitado
+# - Resoluções e steps reduzidos
+# - Parâmetros alinhados com implementação original
+
+flux:
+  base_model: "Comfy-Org/flux1-schnell"
+  fallback_base_model: "black-forest-labs/FLUX.1-dev"
+  flux_dtype: 'fp16'  # fp16 para compatibilidade e economia de VRAM
+  cpu_offload: true
+  image_height: 640   # Reduzido de 1024 para economizar VRAM
+  image_width: 1280   # Reduzido de 2048 para economizar VRAM
+  lora: "./checkpoint/flux_lora/rgb_normal.safetensors"
+  controlnet: "InstantX/FLUX.1-dev-Controlnet-Union"
+  controlnet_modes: ["tile"]  # Apenas 'tile' como no original
+  controlnet_guidance_start: [0.0]  # Alinhado com original
+  controlnet_guidance_end: [0.65]   # Alinhado com original
+  controlnet_conditioning_scale: [0.6]  # Alinhado com original
+  controlnet_kernel_size: 51
+  controlnet_sigma: 2.0
+  controlnet_down_scale: 1
+  redux: "black-forest-labs/FLUX.1-Redux-dev"
+  num_inference_steps: 14  # Reduzido para economia
+  num_inference_steps_fast: 10
+  seed: 42
+  device: 'cuda:0'
+
+multiview:
+  base_model: "sudo-ai/zero123plus-v1.1"
+  custom_pipeline: "./models/zero123plus"
+  unet: "./checkpoint/zero123++/flexgen.ckpt"
+  num_inference_steps: 24  # Reduzido de 32
+  num_inference_steps_fast: 20
+  image_height: 768
+  image_width: 768
+  grid_rows: 2
+  grid_cols: 2
+  seed: 42
+  device: 'cuda:0'
+
+reconstruction:
+  model_config: "./models/lrm/config/PRM_inference.yaml"
+  base_model: "./checkpoint/lrm/final_ckpt.ckpt"
+  device: 'cuda:0'
+  stage2_steps: 40  # Reduzido de 50
+  stage2_steps_fast: 28
+
+caption:
+  base_model: "multimodalart/Florence-2-large-no-flash-attn"
+  device: 'cpu'  # Sempre CPU para economizar VRAM
+
+llm:
+  base_model: "meta-llama/Llama-3.2-3B-Instruct"
+  device: 'cpu'  # Sempre CPU para economizar VRAM
+
+use_zero_gpu: false
+3d_bundle_templates: './init_3d_Bundle'
+

@@ -70,9 +70,17 @@ def _warmup(glctx, device=None):
 class Pix2FacesRenderer:
     def __init__(self, device="cuda"):
         # self._glctx = dr.RasterizeGLContext(output_db=False, device=device)
-        self._glctx = dr.RasterizeCudaContext(device=device)
-        self.device = device
-        _warmup(self._glctx, device)
+        try:
+            self._glctx = dr.RasterizeCudaContext(device=device)
+            self.device = device
+            _warmup(self._glctx, device)
+            self._nvdiffrast_available = True
+        except Exception as e:
+            print(f"[AVISO] nvdiffrast não disponível: {e}")
+            print("[AVISO] Usando fallback sem renderização - funcionalidade limitada")
+            self._glctx = None
+            self.device = device
+            self._nvdiffrast_available = False
 
     def transform_vertices(self, meshes: Meshes, cameras: CamerasBase):
         vertices = cameras.transform_points_ndc(meshes.verts_padded())
@@ -90,6 +98,11 @@ class Pix2FacesRenderer:
         return vertices
 
     def render_pix2faces_nvdiff(self, meshes: Meshes, cameras: CamerasBase, H=512, W=512):
+        if not self._nvdiffrast_available:
+            # Fallback: retornar tensor vazio quando nvdiffrast não está disponível
+            print("[AVISO] nvdiffrast não disponível - retornando resultado vazio")
+            return torch.zeros((1, H, W), dtype=torch.int32, device=self.device)
+
         meshes = meshes.to(self.device)
         cameras = cameras.to(self.device)
         vertices = self.transform_vertices(meshes, cameras)
@@ -103,6 +116,11 @@ pix2faces_renderer = Pix2FacesRenderer()
 def get_visible_faces(meshes: Meshes, cameras: CamerasBase, resolution=1024):
     # pix_to_face = render_pix2faces_py3d(meshes, cameras, H=resolution, W=resolution)['pix_to_face']
     pix_to_face = pix2faces_renderer.render_pix2faces_nvdiff(meshes, cameras, H=resolution, W=resolution)
+
+    if not pix2faces_renderer._nvdiffrast_available:
+        # Fallback: retornar todas as faces quando nvdiffrast não está disponível
+        print("[AVISO] nvdiffrast não disponível - retornando todas as faces como visíveis")
+        return torch.arange(meshes.faces_packed().shape[0], device=meshes.device, dtype=torch.long)
 
     unique_faces = torch.unique(pix_to_face.flatten())
     unique_faces = unique_faces[unique_faces != -1]
@@ -253,6 +271,9 @@ def get_fov_camera_(azimuth, elevation, fovy, radius, mesh, auto_center, scale_f
     return cameras
 
 def multiview_color_projection(meshes: Meshes, image_list: List[Image.Image], cameras_list: List[CamerasBase], weights=None, eps=0.05, resolution=1024, device="cuda", reweight_with_cosangle="square", use_alpha=True, confidence_threshold=0.1, complete_unseen=False, below_confidence_strategy="smooth") -> Meshes:
+    # Use GPU device for pytorch3d operations (no CPU fallback)
+    if isinstance(device, str):
+        device = torch.device(device)
     """
     Projects color from a given image onto a 3D mesh.
 

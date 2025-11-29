@@ -44,6 +44,19 @@ def _get_plugin():
 
     # Compiler options.
     opts = ['-DNVDR_TORCH']
+    
+    # CUDA-specific compiler options
+    cuda_opts = ['-DNVDR_TORCH']
+    
+    # Windows-specific: Add flags to allow unsupported compiler (VS 2019/2022 with CUDA 12.1)
+    # This flag is safe to use and allows CUDA 12.1 to compile with Visual Studio 2019/2022
+    if os.name == 'nt':
+        cuda_opts.append('-allow-unsupported-compiler')
+        # Define macro to bypass STL version check (VS 2022 requires CUDA 12.4+ but we may have 12.1)
+        cuda_opts.append('-D_CRT_STDIO_ISO_WIDE_SPECIFIERS=0')
+        # Try to disable the STL version check
+        opts.append('/D_CRT_STDIO_ISO_WIDE_SPECIFIERS=0')
+        print("[INFO] Adicionando flags para compatibilidade VS 2019/2022 + CUDA 12.1")
 
     # Linker options.
     if os.name == 'posix':
@@ -63,7 +76,23 @@ def _get_plugin():
     ]
 
     # Some containers set this to contain old architectures that won't compile. We only need the one installed in the machine.
+    # Limpar TORCH_CUDA_ARCH_LIST para permitir auto-detecção pelo PyTorch
+    if 'TORCH_CUDA_ARCH_LIST' in os.environ:
+        old_arch = os.environ['TORCH_CUDA_ARCH_LIST']
+        if old_arch and old_arch.strip():
+            print(f"[INFO] Limpando TORCH_CUDA_ARCH_LIST (era: '{old_arch}') para auto-detecção")
     os.environ['TORCH_CUDA_ARCH_LIST'] = ''
+    
+    # Garantir que CUDA_HOME está configurado corretamente
+    cuda_home = os.environ.get('CUDA_HOME') or os.environ.get('CUDA_PATH')
+    if cuda_home:
+        print(f"[INFO] renderutils_plugin (online_render): Usando CUDA_HOME={cuda_home}")
+        # Verificar se nvcc existe
+        nvcc_path = os.path.join(cuda_home, 'bin', 'nvcc.exe' if os.name == 'nt' else 'nvcc')
+        if not os.path.exists(nvcc_path):
+            print(f"[AVISO] nvcc não encontrado em {nvcc_path}")
+    else:
+        print("[AVISO] CUDA_HOME não configurado. PyTorch tentará detectar automaticamente.")
 
     # Try to detect if a stray lock file is left in cache directory and show a warning. This sometimes happens on Windows if the build is interrupted at just the right moment.
     try:
@@ -76,7 +105,7 @@ def _get_plugin():
     # Compile and load.
     source_paths = [os.path.join(os.path.dirname(__file__), fn) for fn in source_files]
     torch.utils.cpp_extension.load(name='renderutils_plugin', sources=source_paths, extra_cflags=opts,
-         extra_cuda_cflags=opts, extra_ldflags=ldflags, with_cuda=True, verbose=True)
+         extra_cuda_cflags=cuda_opts, extra_ldflags=ldflags, with_cuda=True, verbose=True)
 
     # Import, cache, and return the compiled module.
     import renderutils_plugin
