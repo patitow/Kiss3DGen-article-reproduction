@@ -1,6 +1,7 @@
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
+import warnings
 # device = "cuda" # the device to load the model onto
 model_name_or_dir = "meta-llama/Llama-3.2-3B-Instruct"
 
@@ -23,8 +24,22 @@ def load_llm_model(model_name_or_dir, torch_dtype='auto', device_map='cpu'):
         device_map=device_map
     )
     print(f'set llm model to {model_name_or_dir}')
-    tokenizer = AutoTokenizer.from_pretrained(model_name_or_dir)
-    print(f'set llm tokenizer to {model_name_or_dir}')
+    
+    # Suppress the add_prefix_space warning if we need to use slow tokenizer
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', message='.*add_prefix_space.*')
+        warnings.filterwarnings('ignore', message='.*The tokenizer.*needs to be converted.*')
+        
+        # Try to load fast tokenizer first (preferred)
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(model_name_or_dir, use_fast=True)
+            print(f'set llm tokenizer to {model_name_or_dir} (fast tokenizer)')
+        except (OSError, ValueError, TypeError):
+            # If fast tokenizer is not available, load slow tokenizer
+            # The warning about add_prefix_space will be suppressed
+            tokenizer = AutoTokenizer.from_pretrained(model_name_or_dir, use_fast=False)
+            print(f'set llm tokenizer to {model_name_or_dir} (slow tokenizer, add_prefix_space warning suppressed)')
+    
     return model, tokenizer
 
 
