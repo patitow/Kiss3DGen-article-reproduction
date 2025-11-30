@@ -1,61 +1,55 @@
 # modified from https://github.com/Profactor/continuous-remeshing
-import nvdiffrast.torch as dr
 import torch
 from typing import Tuple
+import os
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Tentar importar nvdiffrast - se falhar, será tratado na classe NormalsRenderer
+try:
+    import nvdiffrast.torch as dr
+    _nvdiffrast_available = True
+    logger.info("[NVDIFFRAST] nvdiffrast importado com sucesso")
+except ImportError as e:
+    logger.error(f"[NVDIFFRAST] Erro ao importar nvdiffrast: {e}")
+    logger.error("[NVDIFFRAST] Verifique se nvdiffrast foi compilado corretamente")
+    _nvdiffrast_available = False
+    dr = None
 
 def _warmup(glctx, device=None):
+    if glctx is None:
+        return
     device = 'cuda' if device is None else device
     #windows workaround for https://github.com/NVlabs/nvdiffrast/issues/59
     def tensor(*args, **kwargs):
         return torch.tensor(*args, device=device, **kwargs)
 
     # defines a triangle in homogeneous coordinates and calls dr.rasterize to render this triangle, which may help to initialize or warm up the GPU context
-    pos = tensor([[[-0.8, -0.8, 0, 1], [0.8, -0.8, 0, 1], [-0.8, 0.8, 0, 1]]], dtype=torch.float32)
-    tri = tensor([[0, 1, 2]], dtype=torch.int32)
-    dr.rasterize(glctx, pos, tri, resolution=[256, 256])
+    try:
+        pos = tensor([[[-0.8, -0.8, 0, 1], [0.8, -0.8, 0, 1], [-0.8, 0.8, 0, 1]]], dtype=torch.float32)
+        tri = tensor([[0, 1, 2]], dtype=torch.int32)
+        dr.rasterize(glctx, pos, tri, resolution=[256, 256])
+    except Exception as e:
+        logger.warning(f"[NVDIFFRAST] Falha no warmup: {e}")
 
-# glctx = dr.RasterizeGLContext(output_db=False, device="cuda")
-glctx = dr.RasterizeCudaContext(device="cuda")
+# Contexto global do nvdiffrast - será criado quando necessário
+_glctx = None
 
-class NormalsRenderer:
-    
-    _glctx:dr.RasterizeCudaContext = None
-    
-    def __init__(
-            self,
-            mv: torch.Tensor, #C,4,4  # normal column-major (unlike pytorch3d)
-            proj: torch.Tensor, #C,4,4
-            image_size: Tuple[int,int],
-            mvp = None,
-            device=None,
-            ):
-        if mvp is None:
-            self._mvp = proj @ mv #C,4,4
-        else:
-            self._mvp = mvp
-        self._image_size = image_size
-        self._glctx = glctx
-        _warmup(self._glctx, device)
-
-    def render(self,
-            vertices: torch.Tensor, #V,3 float
-            normals: torch.Tensor, #V,3 float   in [-1, 1]
-            faces: torch.Tensor, #F,3 long
-            ) ->torch.Tensor: #C,H,W,4
-
-        V = vertices.shape[0]
-        faces = faces.type(torch.int32)
-        vert_hom = torch.cat((vertices, torch.ones(V,1,device=vertices.device)),axis=-1) #V,3 -> V,4
-        # transforms the vertices into clip space using the mvp matrix.
-        vertices_clip = vert_hom @ self._mvp.transpose(-2,-1) #C,V,4 # the .transpose(-2,-1) operation ensures that the matrix multiplication aligns with the row-major convention.
-        rast_out,_ = dr.rasterize(self._glctx, vertices_clip, faces, resolution=self._image_size, grad_db=False) #C,H,W,4 -> 4 includes the barycentric coordinates and other data.
-        vert_col = (normals+1)/2 #V,3
-        # this function takes the attributes (colors) defined at the vertices and computes their values at each pixel (or fragment) within the triangles
-        col,_ = dr.interpolate(vert_col, rast_out, faces) #C,H,W,3
-        alpha = torch.clamp(rast_out[..., -1:], max=1) #C,H,W,1
-        col = torch.concat((col,alpha),dim=-1) #C,H,W,4
-        col = dr.antialias(col, rast_out, vertices_clip, faces) #C,H,W,4
-        return col #C,H,W,4
+def _get_glctx():
+    """Obtém ou cria o contexto global do nvdiffrast"""
+    global _glctx
+    if not _nvdiffrast_available or dr is None:
+        return None
+    if _glctx is None:
+        try:
+            _glctx = dr.RasterizeCudaContext(device="cuda")
+            _warmup(_glctx, "cuda")
+            logger.info("[NVDIFFRAST] Contexto CUDA criado com sucesso")
+        except Exception as e:
+            logger.error(f"[NVDIFFRAST] Erro ao criar contexto CUDA: {e}")
+            _glctx = None
+    return _glctx
 
 
 
@@ -117,6 +111,65 @@ def render_mesh_vertex_color(mesh, cameras, H, W, blur_radius=0.0, faces_per_pix
     with torch.autocast(dtype=input_dtype, device_type=torch.device(device).type):
         images, _ = renderer(mesh)
     return images   # BHW4
+
+class NormalsRenderer:
+    """Renderer de normais usando nvdiffrast (rápido)"""
+    
+    _glctx = None
+    
+    def __init__(
+            self,
+            mv: torch.Tensor, #C,4,4  # normal column-major (unlike pytorch3d)
+            proj: torch.Tensor, #C,4,4
+            image_size: Tuple[int,int],
+            mvp = None,
+            device=None,
+            ):
+        if mvp is None:
+            self._mvp = proj @ mv #C,4,4
+        else:
+            self._mvp = mvp
+        self._image_size = image_size
+        
+        # Tentar obter contexto nvdiffrast
+        if not _nvdiffrast_available or dr is None:
+            raise RuntimeError(
+                "nvdiffrast não está disponível. "
+                "O nvdiffrast precisa ser compilado corretamente. "
+                "Verifique se Visual Studio 2019 Build Tools está instalado e se os headers do C++ estão acessíveis. "
+                "Erro: DLL do nvdiffrast não foi carregada."
+            )
+        
+        self._glctx = _get_glctx()
+        if self._glctx is None:
+            raise RuntimeError(
+                "Não foi possível criar contexto CUDA do nvdiffrast. "
+                "Verifique se CUDA está instalado e funcionando corretamente."
+            )
+        _warmup(self._glctx, device)
+
+    def render(self,
+            vertices: torch.Tensor, #V,3 float
+            normals: torch.Tensor, #V,3 float   in [-1, 1]
+            faces: torch.Tensor, #F,3 long
+            ) ->torch.Tensor: #C,H,W,4
+
+        if self._glctx is None or not _nvdiffrast_available or dr is None:
+            raise RuntimeError("nvdiffrast não está disponível para renderização")
+
+        V = vertices.shape[0]
+        faces = faces.type(torch.int32)
+        vert_hom = torch.cat((vertices, torch.ones(V,1,device=vertices.device)),axis=-1) #V,3 -> V,4
+        # transforms the vertices into clip space using the mvp matrix.
+        vertices_clip = vert_hom @ self._mvp.transpose(-2,-1) #C,V,4 # the .transpose(-2,-1) operation ensures that the matrix multiplication aligns with the row-major convention.
+        rast_out,_ = dr.rasterize(self._glctx, vertices_clip, faces, resolution=self._image_size, grad_db=False) #C,H,W,4 -> 4 includes the barycentric coordinates and other data.
+        vert_col = (normals+1)/2 #V,3
+        # this function takes the attributes (colors) defined at the vertices and computes their values at each pixel (or fragment) within the triangles
+        col,_ = dr.interpolate(vert_col, rast_out, faces) #C,H,W,3
+        alpha = torch.clamp(rast_out[..., -1:], max=1) #C,H,W,1
+        col = torch.concat((col,alpha),dim=-1) #C,H,W,4
+        col = dr.antialias(col, rast_out, vertices_clip, faces) #C,H,W,4
+        return col #C,H,W,4
 
 class Pytorch3DNormalsRenderer: # 100 times slower!!!
     def __init__(self, cameras, image_size, device):
