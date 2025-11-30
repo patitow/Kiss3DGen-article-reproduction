@@ -40,14 +40,28 @@ def _get_glctx():
     """Obtém ou cria o contexto global do nvdiffrast"""
     global _glctx
     if not _nvdiffrast_available or dr is None:
+        logger.error("[NVDIFFRAST] nvdiffrast não está disponível (import falhou)")
         return None
     if _glctx is None:
         try:
+            logger.info("[NVDIFFRAST] Tentando criar contexto CUDA...")
+            logger.info("[NVDIFFRAST] Isso pode compilar o plugin nvdiffrast_plugin pela primeira vez")
+            logger.info("[NVDIFFRAST] Verificando TORCH_CUDA_ARCH_LIST antes da compilação...")
+            if 'TORCH_CUDA_ARCH_LIST' in os.environ:
+                logger.info(f"[NVDIFFRAST] TORCH_CUDA_ARCH_LIST={os.environ['TORCH_CUDA_ARCH_LIST']}")
+            else:
+                logger.warning("[NVDIFFRAST] TORCH_CUDA_ARCH_LIST não está configurado")
+            
+            # Tentar criar o contexto - isso vai compilar o plugin se necessário
             _glctx = dr.RasterizeCudaContext(device="cuda")
+            logger.info("[NVDIFFRAST] Contexto CUDA criado, fazendo warmup...")
             _warmup(_glctx, "cuda")
             logger.info("[NVDIFFRAST] Contexto CUDA criado com sucesso")
         except Exception as e:
             logger.error(f"[NVDIFFRAST] Erro ao criar contexto CUDA: {e}")
+            logger.error(f"[NVDIFFRAST] Tipo do erro: {type(e).__name__}")
+            import traceback
+            logger.error(f"[NVDIFFRAST] Traceback completo:\n{traceback.format_exc()}")
             _glctx = None
     return _glctx
 
