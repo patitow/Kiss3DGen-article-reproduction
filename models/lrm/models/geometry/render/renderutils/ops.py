@@ -163,8 +163,48 @@ def _get_plugin():
         
         print(f"[INFO] Compilando renderutils_plugin com flags: {cuda_opts[:5]}...")  # Mostrar primeiros flags
         
-        torch.utils.cpp_extension.load(name='renderutils_plugin', sources=source_paths, extra_cflags=opts,
-             extra_cuda_cflags=cuda_opts, extra_ldflags=ldflags, with_cuda=True, verbose=True)
+        # Capturar saída do ninja para diagnóstico
+        import subprocess
+        import sys
+        
+        try:
+            # Configurar TORCH_CUDA_ARCH_LIST vazio para auto-detecção (nvdiffrast faz isso também)
+            old_arch = os.environ.get('TORCH_CUDA_ARCH_LIST', '')
+            os.environ['TORCH_CUDA_ARCH_LIST'] = ''  # PyTorch vai auto-detectar
+            
+            plugin = torch.utils.cpp_extension.load(name='renderutils_plugin', sources=source_paths, extra_cflags=opts,
+                 extra_cuda_cflags=cuda_opts, extra_ldflags=ldflags, with_cuda=True, verbose=True)
+            
+            # Restaurar TORCH_CUDA_ARCH_LIST se estava configurado
+            if old_arch:
+                os.environ['TORCH_CUDA_ARCH_LIST'] = old_arch
+        except RuntimeError as e:
+            error_msg = str(e)
+            print(f"[ERRO] Erro durante compilação: {error_msg}")
+            
+            # Tentar capturar saída do ninja diretamente
+            build_dir = torch.utils.cpp_extension._get_build_directory('renderutils_plugin', False)
+            if os.path.exists(build_dir):
+                print(f"[INFO] Verificando build directory: {build_dir}")
+                # Procurar por arquivos de log ou saída do ninja
+                for root, dirs, files in os.walk(build_dir):
+                    for file in files:
+                        if file.endswith('.log') or 'ninja' in file.lower() or file.endswith('.o') or file.endswith('.cu'):
+                            log_path = os.path.join(root, file)
+                            try:
+                                if file.endswith('.log'):
+                                    with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                        log_content = f.read()
+                                        if 'error' in log_content.lower() or 'fatal' in log_content.lower() or 'C1189' in log_content:
+                                            print(f"[ERRO] Erro encontrado em {log_path}:")
+                                            # Mostrar linhas com erros
+                                            error_lines = [l for l in log_content.split('\n') if any(x in l.lower() for x in ['error', 'fatal', 'c1189', 'unsupported'])]
+                                            for line in error_lines[-15:]:
+                                                print(f"  {line}")
+                            except Exception as log_err:
+                                pass
+            
+            raise
 
         # Import, cache, and return the compiled module.
         import renderutils_plugin
