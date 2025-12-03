@@ -55,12 +55,14 @@ def _get_plugin():
 
         # If cl.exe is not on path, try to find it.
         # FORÇAR uso de VS 2019 para CUDA 12.1
-            cl_path = find_cl_path()
-            if cl_path is None:
+        cl_path = find_cl_path()
+        if cl_path is None:
             # Tentar verificar se cl.exe já está no PATH
             if os.system("where cl.exe >nul 2>nul") != 0:
-                raise RuntimeError("VS 2019 não encontrado! CUDA 12.1 requer Visual Studio 2019. "
-                                 "Instale VS 2019 Build Tools ou Community.")
+                raise RuntimeError(
+                    "VS 2019 não encontrado! CUDA 12.1 requer Visual Studio 2019. "
+                    "Instale VS 2019 Build Tools ou Community."
+                )
             else:
                 print("[AVISO] cl.exe encontrado no PATH, mas VS 2019 não detectado explicitamente")
         else:
