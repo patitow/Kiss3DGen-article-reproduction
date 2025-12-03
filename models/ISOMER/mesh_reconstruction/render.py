@@ -21,7 +21,7 @@ def _warmup(glctx, device=None):
     if glctx is None:
         return
     device = 'cuda' if device is None else device
-    #windows workaround for https://github.com/NVlabs/nvdiffrast/issues/59
+    # windows workaround for https://github.com/NVlabs/nvdiffrast/issues/59
     def tensor(*args, **kwargs):
         return torch.tensor(*args, device=device, **kwargs)
 
@@ -51,7 +51,7 @@ def _get_glctx():
                 logger.info(f"[NVDIFFRAST] TORCH_CUDA_ARCH_LIST={os.environ['TORCH_CUDA_ARCH_LIST']}")
             else:
                 logger.warning("[NVDIFFRAST] TORCH_CUDA_ARCH_LIST não está configurado")
-            
+
             # Tentar criar o contexto - isso vai compilar o plugin se necessário
             _glctx = dr.RasterizeCudaContext(device="cuda")
             logger.info("[NVDIFFRAST] Contexto CUDA criado, fazendo warmup...")

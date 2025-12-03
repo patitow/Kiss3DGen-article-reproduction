@@ -55,8 +55,8 @@ def _get_plugin():
 
         # If cl.exe is not on path, try to find it.
         # FORÇAR uso de VS 2019 para CUDA 12.1
-        cl_path = find_cl_path()
-        if cl_path is None:
+            cl_path = find_cl_path()
+            if cl_path is None:
             # Tentar verificar se cl.exe já está no PATH
             if os.system("where cl.exe >nul 2>nul") != 0:
                 raise RuntimeError("VS 2019 não encontrado! CUDA 12.1 requer Visual Studio 2019. "
@@ -173,7 +173,7 @@ def _get_plugin():
             os.environ['TORCH_CUDA_ARCH_LIST'] = ''  # PyTorch vai auto-detectar
             
             plugin = torch.utils.cpp_extension.load(name='renderutils_plugin', sources=source_paths, extra_cflags=opts,
-                 extra_cuda_cflags=cuda_opts, extra_ldflags=ldflags, with_cuda=True, verbose=True)
+         extra_cuda_cflags=cuda_opts, extra_ldflags=ldflags, with_cuda=True, verbose=True)
             
             # Restaurar TORCH_CUDA_ARCH_LIST se estava configurado
             if old_arch:
@@ -206,10 +206,10 @@ def _get_plugin():
             
             raise
 
-        # Import, cache, and return the compiled module.
-        import renderutils_plugin
-        _cached_plugin = renderutils_plugin
-        return _cached_plugin
+    # Import, cache, and return the compiled module.
+    import renderutils_plugin
+    _cached_plugin = renderutils_plugin
+    return _cached_plugin
     except Exception as e:
         error_msg = str(e)
         print(f"[ERRO] Falha ao compilar renderutils_plugin: {error_msg}")

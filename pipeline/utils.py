@@ -163,6 +163,12 @@ def isomer_reconstruct(
     rgb_multi_view = rgb_multi_view.permute(0,2,3,1)
 
     logger.info(f"==> Runing ISOMER reconstruction ...")
+    # Garantir que vertices e faces estão no device correto
+    if isinstance(vertices, torch.Tensor):
+        vertices = vertices.to(device)
+    if isinstance(faces, torch.Tensor):
+        faces = faces.to(device)
+    
     meshes = reconstruction(
         normal_pils=global_normal, 
         masks=multi_view_mask, 
@@ -181,6 +187,7 @@ def isomer_reconstruct(
         end_edge_len_stage1=0.02,
         start_edge_len_stage2=0.02,
         end_edge_len_stage2=0.005,
+        device=device,  # Passar device explicitamente
     )
 
     multi_view_mask_proj = mask_fix(multi_view_mask, erode_dilate=-10, blur=5)

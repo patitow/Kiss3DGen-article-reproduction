@@ -1,3 +1,4 @@
+import os
 from typing import List
 import torch
 import numpy as np
@@ -56,7 +57,20 @@ def render_pix2faces_py3d(meshes, cameras, H=512, W=512, blur_radius=0.0, faces_
         "pix_to_face": fragments.pix_to_face[..., 0],
     }
 
-import nvdiffrast.torch as dr
+_K3D_DISABLE_NVDIFFRAST = os.environ.get("K3D_DISABLE_NVDIFFRAST", "0") == "1"
+dr = None
+_nvdiffrast_import_error = None
+
+if not _K3D_DISABLE_NVDIFFRAST:
+    try:
+        import nvdiffrast.torch as dr  # type: ignore
+    except Exception as exc:
+        _nvdiffrast_import_error = exc
+        print(f"[AVISO] Falha ao importar nvdiffrast ({exc}). Prosseguindo sem aceleração CUDA.")
+        dr = None
+        _K3D_DISABLE_NVDIFFRAST = True
+else:
+    print("[INFO] nvdiffrast desabilitado via K3D_DISABLE_NVDIFFRAST=1; usando fallback PyTorch3D.")
 
 def _warmup(glctx, device=None):
     device = 'cuda' if device is None else device
@@ -69,17 +83,25 @@ def _warmup(glctx, device=None):
 
 class Pix2FacesRenderer:
     def __init__(self, device="cuda"):
-        # self._glctx = dr.RasterizeGLContext(output_db=False, device=device)
+        self.device = device
+        if dr is None or _K3D_DISABLE_NVDIFFRAST:
+            self._glctx = None
+            self._nvdiffrast_available = False
+            if _nvdiffrast_import_error:
+                print(f"[AVISO] nvdiffrast não disponível ({_nvdiffrast_import_error}). "
+                      "Usando fallback sem renderização - funcionalidade limitada")
+            else:
+                print("[AVISO] nvdiffrast desabilitado. Usando fallback sem renderização - funcionalidade limitada")
+            return
+
         try:
             self._glctx = dr.RasterizeCudaContext(device=device)
-            self.device = device
             _warmup(self._glctx, device)
             self._nvdiffrast_available = True
         except Exception as e:
             print(f"[AVISO] nvdiffrast não disponível: {e}")
             print("[AVISO] Usando fallback sem renderização - funcionalidade limitada")
             self._glctx = None
-            self.device = device
             self._nvdiffrast_available = False
 
     def transform_vertices(self, meshes: Meshes, cameras: CamerasBase):

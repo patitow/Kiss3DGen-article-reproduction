@@ -185,12 +185,34 @@ class FluxPriorReduxPipeline(DiffusionPipeline):
 
     def encode_image(self, image, device, num_images_per_prompt):
         dtype = next(self.image_encoder.parameters()).dtype
-        image = self.feature_extractor.preprocess(
+
+        image_inputs = self.feature_extractor.preprocess(
             images=image, do_resize=True, return_tensors="pt", do_convert_rgb=True, do_rescale=False
         )
-        image = image.to(device=device, dtype=dtype)
 
-        image_enc_hidden_states = self.image_encoder(**image).last_hidden_state
+        processed_inputs = {}
+        for key, value in image_inputs.items():
+            if torch.is_tensor(value):
+                processed_inputs[key] = value.to(device=device, dtype=dtype)
+            else:
+                processed_inputs[key] = value
+
+        def _ensure_module_on_device(module, target_device):
+            try:
+                current_device = next(module.parameters()).device
+            except (StopIteration, AttributeError):
+                current_device = torch.device(target_device)
+            if str(current_device) == str(target_device):
+                return
+            if str(current_device) == "meta":
+                to_empty = getattr(module, "to_empty", None)
+                if callable(to_empty):
+                    module.to_empty(device=target_device)
+            module.to(target_device)
+
+        _ensure_module_on_device(self.image_encoder, device)
+
+        image_enc_hidden_states = self.image_encoder(**processed_inputs).last_hidden_state
         image_enc_hidden_states = image_enc_hidden_states.repeat_interleave(num_images_per_prompt, dim=0)
 
         return image_enc_hidden_states

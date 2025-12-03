@@ -2,8 +2,15 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 import warnings
+import requests
+import json
+import os
 # device = "cuda" # the device to load the model onto
 model_name_or_dir = "meta-llama/Llama-3.2-3B-Instruct"
+
+# Ollama configuration
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
 
 
 DEFAULT_SYSTEM_PROMPT = """You are an expert 3D asset director. When the user provides a base caption, expand it into a precise,
@@ -15,39 +22,106 @@ Do not invent accessories that were not implied by the caption; instead, clarify
 
 Return only the enriched description in English."""
 
-def load_llm_model(model_name_or_dir, torch_dtype='auto', device_map='cpu'):
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name_or_dir,
-        torch_dtype=torch_dtype,
-        # torch_dtype=torch.float8_e5m2,
-        # torch_dtype=torch.float16,
-        device_map=device_map
-    )
-    print(f'set llm model to {model_name_or_dir}')
+def check_ollama_available():
+    """Check if Ollama is available and running"""
+    try:
+        response = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=2)
+        return response.status_code == 200
+    except:
+        return False
+
+def load_llm_model(model_name_or_dir, torch_dtype='auto', device_map='cpu', use_ollama=None):
+    """
+    Load LLM model. If use_ollama is None, will try to auto-detect Ollama availability.
+    If Ollama is available, returns ('ollama', None) instead of (model, tokenizer).
+    """
+    # Auto-detect Ollama if not explicitly set
+    if use_ollama is None:
+        use_ollama = check_ollama_available()
     
-    # Suppress the add_prefix_space warning if we need to use slow tokenizer
-    with warnings.catch_warnings():
-        warnings.filterwarnings('ignore', message='.*add_prefix_space.*')
-        warnings.filterwarnings('ignore', message='.*The tokenizer.*needs to be converted.*')
+    if use_ollama:
+        print(f'Using Ollama API at {OLLAMA_BASE_URL} with model {OLLAMA_MODEL}')
+        return 'ollama', None
+    
+    # Fallback to Hugging Face model
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name_or_dir,
+            torch_dtype=torch_dtype,
+            # torch_dtype=torch.float8_e5m2,
+            # torch_dtype=torch.float16,
+            device_map=device_map
+        )
+        print(f'set llm model to {model_name_or_dir}')
         
-        # Try to load fast tokenizer first (preferred)
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(model_name_or_dir, use_fast=True)
-            print(f'set llm tokenizer to {model_name_or_dir} (fast tokenizer)')
-        except (OSError, ValueError, TypeError):
-            # If fast tokenizer is not available, load slow tokenizer
-            # The warning about add_prefix_space will be suppressed
-            tokenizer = AutoTokenizer.from_pretrained(model_name_or_dir, use_fast=False)
-            print(f'set llm tokenizer to {model_name_or_dir} (slow tokenizer, add_prefix_space warning suppressed)')
-    
-    return model, tokenizer
+        # Suppress the add_prefix_space warning if we need to use slow tokenizer
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', message='.*add_prefix_space.*')
+            warnings.filterwarnings('ignore', message='.*The tokenizer.*needs to be converted.*')
+            
+            # Try to load fast tokenizer first (preferred)
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(model_name_or_dir, use_fast=True)
+                print(f'set llm tokenizer to {model_name_or_dir} (fast tokenizer)')
+            except (OSError, ValueError, TypeError):
+                # If fast tokenizer is not available, load slow tokenizer
+                # The warning about add_prefix_space will be suppressed
+                tokenizer = AutoTokenizer.from_pretrained(model_name_or_dir, use_fast=False)
+                print(f'set llm tokenizer to {model_name_or_dir} (slow tokenizer, add_prefix_space warning suppressed)')
+        
+        return model, tokenizer
+    except Exception as e:
+        # If Hugging Face fails, try Ollama as fallback
+        if check_ollama_available():
+            print(f'Failed to load Hugging Face model, falling back to Ollama: {e}')
+            print(f'Using Ollama API at {OLLAMA_BASE_URL} with model {OLLAMA_MODEL}')
+            return 'ollama', None
+        else:
+            raise
 
 
 # print(f"Before load llm model: {torch.cuda.memory_allocated() / 1024**3} GB")
 # load_model()
 # print(f"After load llm model: {torch.cuda.memory_allocated() / 1024**3} GB")
 
+def get_llm_response_ollama(user_prompt, system_prompt=DEFAULT_SYSTEM_PROMPT, seed=None):
+    """Get LLM response using Ollama API"""
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt}
+    ]
+    
+    payload = {
+        "model": OLLAMA_MODEL,
+        "messages": messages,
+        "stream": False,
+        "options": {
+            "temperature": 0.7,
+            "num_predict": 512,
+        }
+    }
+    
+    if seed is not None:
+        payload["options"]["seed"] = seed
+    
+    try:
+        response = requests.post(
+            f"{OLLAMA_BASE_URL}/api/chat",
+            json=payload,
+            timeout=120
+        )
+        response.raise_for_status()
+        result = response.json()
+        return result.get("message", {}).get("content", "").strip()
+    except Exception as e:
+        raise RuntimeError(f"Ollama API error: {e}")
+
 def get_llm_response(model, tokenizer, user_prompt, seed=None, system_prompt=DEFAULT_SYSTEM_PROMPT):
+    # Check if using Ollama
+    if model == 'ollama' or (isinstance(model, str) and model == 'ollama'):
+        return get_llm_response_ollama(user_prompt, system_prompt, seed)
+    
+    # Original Hugging Face implementation
     # global model
     # global tokenizer
     # load_model()
