@@ -112,30 +112,24 @@ def load_obj(filename, clear_ks=True, mtl_override=None, return_attributes=False
                 used_materials.append(mat)
             activeMatIdx = used_materials.index(mat)
         elif prefix == 'f': # Parse face
+            def _parse_vtn(token):
+                parts = token.split('/')
+                while len(parts) < 3:
+                    parts.append('')
+                v_idx = int(parts[0]) - 1 if parts[0] else -1
+                t_idx = int(parts[1]) - 1 if parts[1] else -1
+                n_idx = int(parts[2]) - 1 if parts[2] else -1
+                return v_idx, t_idx, n_idx
+
             vs = line.split()[1:]
             nv = len(vs)
-            vv = vs[0].split('/')
-            v0 = int(vv[0]) - 1
-            t0 = int(vv[1]) - 1 if vv[1] != "" else -1
-            try:
-                n0 = int(vv[2]) - 1 if vv[2] != "" else -1
-            except:
+            v0, t0, n0 = _parse_vtn(vs[0])
+            if n0 == -1:
                 read_normal = False
+
             for i in range(nv - 2): # Triangulate polygons
-                vv = vs[i + 1].split('/')
-                v1 = int(vv[0]) - 1
-                t1 = int(vv[1]) - 1 if vv[1] != "" else -1
-                if read_normal==False:
-                    pass
-                else:
-                    n1 = int(vv[2]) - 1 if vv[2] != "" else -1
-                vv = vs[i + 2].split('/')
-                v2 = int(vv[0]) - 1
-                t2 = int(vv[1]) - 1 if vv[1] != "" else -1
-                if read_normal==False:
-                    pass
-                else:
-                    n2 = int(vv[2]) - 1 if vv[2] != "" else -1
+                v1, t1, n1 = _parse_vtn(vs[i + 1])
+                v2, t2, n2 = _parse_vtn(vs[i + 2])
                 mfaces.append(activeMatIdx)
                 faces.append([v0, v1, v2])
                 tfaces.append([t0, t1, t2])
