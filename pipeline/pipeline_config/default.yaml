@@ -15,8 +15,8 @@ flux:
   controlnet_sigma: 1.5
   controlnet_down_scale: 1
   redux: "black-forest-labs/FLUX.1-Redux-dev"
-  num_inference_steps: 14
-  num_inference_steps_fast: 10
+  num_inference_steps: 30
+  num_inference_steps_fast: 20
   seed: 42
   device: 'cuda:0'
 
@@ -38,8 +38,8 @@ reconstruction:
   model_config: "./models/lrm/config/PRM_inference.yaml"
   base_model: "./checkpoint/lrm/final_ckpt.ckpt"
   device: 'cuda:0'
-  stage2_steps: 40
-  stage2_steps_fast: 28
+  stage2_steps: 60
+  stage2_steps_fast: 40
 
 caption:
   base_model: "multimodalart/Florence-2-large-no-flash-attn"
@@ -55,7 +55,26 @@ use_zero_gpu: false # for huggingface demo only
 img2img_defaults:
   redux_strength: 0.4
   primary_strength: 0.55
-  guidance_scale: 4.0
+  guidance_scale: 7.0
+
+# Perfis de qualidade (aplicados em tempo de inicialização)
+quality_mode: "balanced"
+quality_modes:
+  fast:
+    flux_steps: 20
+    flux_guidance: 5.0
+    isomer_stage1: 20
+    isomer_stage2: 45
+  balanced:
+    flux_steps: 30
+    flux_guidance: 7.0
+    isomer_stage1: 25
+    isomer_stage2: 60
+  high:
+    flux_steps: 50
+    flux_guidance: 7.0
+    isomer_stage1: 30
+    isomer_stage2: 80
 
 controlnet_defaults:
   modes: ["gray"]
