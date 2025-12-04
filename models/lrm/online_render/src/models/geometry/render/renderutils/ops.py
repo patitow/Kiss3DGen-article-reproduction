@@ -10,6 +10,8 @@
 import numpy as np
 import os
 import sys
+import importlib.util
+from pathlib import Path
 import torch
 import torch.utils.cpp_extension
 
@@ -25,6 +27,44 @@ def _get_plugin():
     global _cached_plugin
     if _cached_plugin is not None:
         return _cached_plugin
+
+    # Verificar se já existe uma versão pré-compilada disponível.
+    def _try_load_precompiled(path: Path):
+        if not path or not path.exists():
+            return None
+        try:
+            spec = importlib.util.spec_from_file_location("renderutils_plugin", path)
+            module = importlib.util.module_from_spec(spec)
+            assert spec.loader is not None
+            spec.loader.exec_module(module)
+            print(f"[INFO] renderutils_plugin carregado de {path}")
+            return module
+        except Exception as exc:
+            print(f"[AVISO] Falha ao carregar renderutils_plugin existente ({path}): {exc}")
+            return None
+
+    torch_ext_dir = os.environ.get("TORCH_EXTENSIONS_DIR")
+    candidate_dirs = []
+    if torch_ext_dir:
+        candidate_dirs.append(Path(torch_ext_dir) / "renderutils_plugin")
+    try:
+        candidate_dirs.append(Path(torch.utils.cpp_extension._get_build_directory('renderutils_plugin', False)))
+    except Exception:
+        pass
+
+    precompiled_names = [
+        "renderutils_plugin.pyd",
+        "renderutils_plugin_v1.pyd",
+        "renderutils_plugin.so",
+        "renderutils_plugin_v1.so",
+    ]
+    for base_dir in candidate_dirs:
+        for name in precompiled_names:
+            module_path = base_dir / name
+            module = _try_load_precompiled(module_path)
+            if module is not None:
+                _cached_plugin = module
+                return _cached_plugin
 
     # Make sure we can find the necessary compiler and libary binaries.
     if os.name == 'nt':
