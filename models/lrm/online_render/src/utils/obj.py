@@ -61,7 +61,7 @@ def load_obj(filename, clear_ks=True, mtl_override=None, return_attributes=False
     obj_path = os.path.dirname(filename)
 
     # Read entire file
-    with open(filename, 'r') as f:
+    with open(filename, 'r', encoding='utf-8', errors='ignore') as f:
         lines = f.readlines()
 
     # Load materials
@@ -176,7 +176,7 @@ def load_obj(filename, clear_ks=True, mtl_override=None, return_attributes=False
 def write_obj(folder, mesh, save_material=True):
     obj_file = os.path.join(folder, 'mesh.obj')
     print("Writing mesh: ", obj_file)
-    with open(obj_file, "w") as f:
+    with open(obj_file, "w", encoding='utf-8') as f:
         f.write("mtllib mesh.mtl\n")
         f.write("g default\n")
 

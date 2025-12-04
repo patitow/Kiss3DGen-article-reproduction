@@ -11,7 +11,16 @@ import torch
 import nvdiffrast.torch as dr
 
 from . import render_utils
-from models.lrm.models.geometry.render import renderutils as ru
+# LAZY LOADING: Importar renderutils apenas quando necessário para evitar compilação durante carregamento do LRM
+_ru_module = None
+def _get_renderutils():
+    """Lazy import de renderutils - só compila quando realmente usado"""
+    global _ru_module
+    if _ru_module is None:
+        from models.lrm.models.geometry.render import renderutils as ru
+        _ru_module = ru
+    return _ru_module
+
 import numpy as np
 from PIL import Image
 
@@ -177,6 +186,7 @@ def shade(
     #if 'no_perturbed_nrm' in material and material['no_perturbed_nrm']:
     perturbed_nrm = None
 
+    ru = _get_renderutils()  # Lazy load apenas quando necessário
     gb_normal_ = ru.prepare_shading_normal(gb_pos, view_pos, perturbed_nrm, gb_normal, gb_tangent, gb_geometric_normal, two_sided_shading=True, opengl=True)
 
     ################################################################################
@@ -330,6 +340,7 @@ def render_mesh(
     view_pos    = prepare_input_vector(view_pos)
 
     # clip space transform
+    ru = _get_renderutils()  # Lazy load apenas quando necessário
     v_pos_clip = ru.xfm_points(mesh.v_pos[None, ...], mtx_in)
 
     # Render all layers front-to-back

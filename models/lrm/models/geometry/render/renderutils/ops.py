@@ -20,11 +20,94 @@ from .loss import *
 # C++/Cuda plugin compiler/loader.
 
 _cached_plugin = None
+_compilation_attempted = False
+_compilation_failed = False
+
 def _get_plugin():
     # Return cached plugin if already loaded.
-    global _cached_plugin
+    global _cached_plugin, _compilation_attempted, _compilation_failed
+    
     if _cached_plugin is not None:
         return _cached_plugin
+    
+    # Se já tentamos compilar e falhou, não tentar novamente
+    if _compilation_failed:
+        raise RuntimeError(
+            "renderutils_plugin não está disponível (compilação falhou anteriormente). "
+            "Pipeline requer esta extensão para renderização GPU. "
+            "Verifique se Visual Studio Build Tools está instalado corretamente."
+        )
+    
+    # VERIFICAÇÃO DE PRÉ-COMPILAÇÃO: SEMPRE verificar primeiro se já existe versão compilada
+    # Isso evita compilação desnecessária e travamentos
+    print("[INFO] Verificando se renderutils_plugin já está compilado...")
+    sys.stdout.flush()
+    
+    # Método 1: Tentar importar diretamente (PyTorch pode já ter em cache)
+    try:
+        import renderutils_plugin
+        _cached_plugin = renderutils_plugin
+        print("[OK] Plugin já está importado e disponível!")
+        return _cached_plugin
+    except ImportError:
+        pass  # Não está importado, continuar verificação
+    except Exception as direct_import_err:
+        print(f"[AVISO] Erro ao tentar importar diretamente: {direct_import_err}")
+    
+    # Método 2: Verificar diretório de build do PyTorch e carregar pré-compilado
+    try:
+        import importlib.util
+        
+        # PyTorch armazena extensões compiladas em um diretório específico
+        build_dir = torch.utils.cpp_extension._get_build_directory('renderutils_plugin', False)
+        
+        if os.path.exists(build_dir):
+            print(f"[INFO] Diretório de build encontrado: {build_dir}")
+            # Procurar por arquivos .pyd (Windows) ou .so (Linux) compilados
+            compiled_extensions = []
+            for root, dirs, files in os.walk(build_dir):
+                for file in files:
+                    if (file.endswith('.pyd') or file.endswith('.so')) and 'renderutils_plugin' in file:
+                        compiled_extensions.append(os.path.join(root, file))
+            
+            if compiled_extensions:
+                print(f"[INFO] Encontrados {len(compiled_extensions)} arquivo(s) compilado(s):")
+                for ext_file in compiled_extensions:
+                    file_size = os.path.getsize(ext_file) / (1024 * 1024)  # MB
+                    print(f"  - {ext_file} ({file_size:.2f} MB)")
+                
+                # Tentar carregar o plugin compilado
+                print("[INFO] Carregando versão pré-compilada...")
+                try:
+                    spec = importlib.util.spec_from_file_location("renderutils_plugin", compiled_extensions[0])
+                    if spec and spec.loader:
+                        plugin = importlib.util.module_from_spec(spec)
+                        spec.loader.exec_module(plugin)
+                        _cached_plugin = plugin
+                        print("[OK] Plugin pré-compilado carregado com sucesso!")
+                        return _cached_plugin
+                except Exception as load_err:
+                    print(f"[AVISO] Não foi possível carregar versão pré-compilada: {load_err}")
+                    print("[INFO] Tentando usar PyTorch load() que pode encontrar automaticamente...")
+            else:
+                print("[INFO] Nenhum arquivo compilado encontrado no diretório de build")
+        else:
+            print("[INFO] Diretório de build não existe")
+    except Exception as check_err:
+        print(f"[AVISO] Erro ao verificar pré-compilação: {check_err}")
+    
+    # Se chegou aqui, não encontrou pré-compilado. Tentar usar PyTorch load() que pode encontrar automaticamente
+    # ou compilar se necessário
+    if _compilation_attempted:
+        # Se já tentamos e não temos cache, algo deu errado
+        raise RuntimeError(
+            "renderutils_plugin não está disponível. "
+            "Compilação pode ter falhado silenciosamente. "
+            "Verifique os logs anteriores ou execute scripts/precompile_nvdiffrast.py"
+        )
+    
+    _compilation_attempted = True
+    print("[INFO] Versão pré-compilada não encontrada. PyTorch tentará carregar ou compilar...")
 
     # Make sure we can find the necessary compiler and libary binaries.
     if os.name == 'nt':
@@ -167,15 +250,57 @@ def _get_plugin():
         
         # Capturar saída do ninja para diagnóstico
         import subprocess
-        import sys
+        # sys já está importado no topo do arquivo
         
         try:
             # Configurar TORCH_CUDA_ARCH_LIST vazio para auto-detecção (nvdiffrast faz isso também)
             old_arch = os.environ.get('TORCH_CUDA_ARCH_LIST', '')
             os.environ['TORCH_CUDA_ARCH_LIST'] = ''  # PyTorch vai auto-detectar
             
-            plugin = torch.utils.cpp_extension.load(name='renderutils_plugin', sources=source_paths, extra_cflags=opts,
-         extra_cuda_cflags=cuda_opts, extra_ldflags=ldflags, with_cuda=True, verbose=True)
+            print("[INFO] Iniciando compilação do renderutils_plugin (pode demorar alguns minutos)...")
+            print("[INFO] Se esta etapa travar, verifique se Visual Studio Build Tools está instalado corretamente.")
+            print("[INFO] Verificando se já existe versão compilada...")
+            sys.stdout.flush()
+            
+            # Verificar se já existe uma versão compilada
+            build_dir = torch.utils.cpp_extension._get_build_directory('renderutils_plugin', False)
+            if os.path.exists(build_dir):
+                print(f"[INFO] Diretório de build encontrado: {build_dir}")
+                # Procurar por arquivos .pyd ou .so compilados
+                compiled_files = []
+                for root, dirs, files in os.walk(build_dir):
+                    for file in files:
+                        if file.endswith(('.pyd', '.so')) and 'renderutils_plugin' in file:
+                            compiled_files.append(os.path.join(root, file))
+                if compiled_files:
+                    print(f"[INFO] Arquivos compilados encontrados: {compiled_files}")
+                    print("[INFO] Tentando carregar versão pré-compilada...")
+                    try:
+                        import importlib.util
+                        spec = importlib.util.spec_from_file_location("renderutils_plugin", compiled_files[0])
+                        if spec and spec.loader:
+                            plugin = importlib.util.module_from_spec(spec)
+                            spec.loader.exec_module(plugin)
+                            _cached_plugin = plugin
+                            print("[INFO] Versão pré-compilada carregada com sucesso!")
+                            return plugin
+                    except Exception as e:
+                        print(f"[AVISO] Não foi possível carregar versão pré-compilada: {e}")
+                        print("[INFO] Recompilando...")
+            
+            # PyTorch load() primeiro tenta encontrar versão compilada, só compila se não encontrar
+            print("[INFO] PyTorch tentando carregar plugin (usará pré-compilado se disponível, ou compilará se necessário)...")
+            sys.stdout.flush()
+            
+            plugin = torch.utils.cpp_extension.load(
+                name='renderutils_plugin', 
+                sources=source_paths, 
+                extra_cflags=opts,
+                extra_cuda_cflags=cuda_opts, 
+                extra_ldflags=ldflags, 
+                with_cuda=True, 
+                verbose=True
+            )
             
             # Restaurar TORCH_CUDA_ARCH_LIST se estava configurado
             if old_arch:
@@ -207,11 +332,11 @@ def _get_plugin():
                                 pass
             
             raise
-
-    # Import, cache, and return the compiled module.
-    import renderutils_plugin
-    _cached_plugin = renderutils_plugin
-    return _cached_plugin
+        
+        # Import, cache, and return the compiled module.
+        import renderutils_plugin
+        _cached_plugin = renderutils_plugin
+        return _cached_plugin
     except Exception as e:
         error_msg = str(e)
         print(f"[ERRO] Falha ao compilar renderutils_plugin: {error_msg}")
@@ -230,8 +355,15 @@ def _get_plugin():
                 if '-allow-unsupported-compiler' not in cuda_opts:
                     cuda_opts.append('-allow-unsupported-compiler')
                 
-                torch.utils.cpp_extension.load(name='renderutils_plugin', sources=source_paths, extra_cflags=opts,
-                     extra_cuda_cflags=cuda_opts, extra_ldflags=ldflags, with_cuda=True, verbose=True)
+                torch.utils.cpp_extension.load(
+                    name='renderutils_plugin',
+                    sources=source_paths,
+                    extra_cflags=opts,
+                    extra_cuda_cflags=cuda_opts,
+                    extra_ldflags=ldflags,
+                    with_cuda=True,
+                    verbose=True,
+                )
                 
                 import renderutils_plugin
                 _cached_plugin = renderutils_plugin
@@ -239,11 +371,16 @@ def _get_plugin():
             except Exception as e2:
                 print(f"[ERRO] Recompilação também falhou: {e2}")
                 print("[AVISO] renderutils_plugin não disponível. Pipeline usará fallback CPU.")
-                raise RuntimeError(f"Não foi possível compilar renderutils_plugin. Erro: {e2}. "
-                                 f"Pipeline requer esta extensão para renderização GPU. "
-                                 f"Verifique se Visual Studio Build Tools está instalado corretamente.")
-        
-        raise
+        _compilation_failed = True
+        raise RuntimeError(
+                f"Não foi possível compilar renderutils_plugin. Erro: {e2}. "
+                f"Pipeline requer esta extensão para renderização GPU. "
+                f"Verifique se Visual Studio Build Tools está instalado corretamente."
+            )
+    
+    # Se chegou aqui, a compilação falhou mas não foi capturada
+    _compilation_failed = True
+    raise
 
 #----------------------------------------------------------------------------
 # Internal kernels, just used for testing functionality

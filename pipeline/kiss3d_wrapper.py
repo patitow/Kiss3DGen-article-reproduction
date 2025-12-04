@@ -9,7 +9,7 @@ import yaml
 import uuid
 from typing import Union, Any, Dict
 from einops import rearrange
-from PIL import Image
+from PIL import Image, ImageOps
 import time
 
 from pipeline.utils import logger, TMP_DIR, OUT_DIR
@@ -208,6 +208,9 @@ class kiss3d_wrapper(object):
         self.llm_model = llm_model
         self.llm_tokenizer = llm_tokenizer
 
+        self.img2img_defaults = self.config.get('img2img_defaults', {})
+        self.controlnet_defaults = self.config.get('controlnet_defaults', {})
+
         self.to_512_tensor = torchvision.transforms.Compose([
             torchvision.transforms.ToTensor(),
             torchvision.transforms.Resize((512, 512), interpolation=2),
@@ -217,6 +220,56 @@ class kiss3d_wrapper(object):
 
     def renew_uuid(self):
         self.uuid = uuid.uuid4()
+
+    @staticmethod
+    def _expand_to_len(value, target_len):
+        if isinstance(value, (list, tuple)):
+            value_list = list(value)
+            if len(value_list) == target_len:
+                return value_list
+            if len(value_list) == 1:
+                return value_list * target_len
+            raise ValueError(f"Value length {len(value_list)} does not match expected length {target_len}")
+        return [value for _ in range(target_len)]
+
+    def prepare_controlnet_conditions(self, reference_image, save_intermediate_results=True):
+        """
+        Builds controlnet control images and schedules using defaults from config.
+        """
+        ctrl_cfg = self.controlnet_defaults or {}
+        control_mode = ctrl_cfg.get('modes', ['tile'])
+        if isinstance(control_mode, str):
+            control_mode = [control_mode]
+        control_mode = list(control_mode)
+
+        if len(control_mode) == 0:
+            return [], [], [], [], []
+
+        preprocess_cfg = ctrl_cfg.get('preprocess_kwargs', {})
+        default_save = ctrl_cfg.get('save_intermediate_results', save_intermediate_results)
+        control_images = []
+        for mode in control_mode:
+            mode_kwargs = preprocess_cfg.get(mode, {})
+            if isinstance(mode_kwargs, dict):
+                mode_kwargs = dict(mode_kwargs)
+            else:
+                mode_kwargs = {}
+            local_save = mode_kwargs.pop('save_intermediate_results', default_save)
+            control_images.append(
+                self.preprocess_controlnet_cond_image(
+                    reference_image, mode,
+                    save_intermediate_results=local_save,
+                    **mode_kwargs
+                )
+            )
+
+        control_guidance_start = self._expand_to_len(ctrl_cfg.get('guidance_start', 0.0), len(control_mode))
+        control_guidance_end = self._expand_to_len(ctrl_cfg.get('guidance_end', 1.0), len(control_mode))
+        controlnet_conditioning_scale = self._expand_to_len(
+            ctrl_cfg.get('conditioning_scale', 1.0), len(control_mode)
+        )
+
+        return control_mode, control_images, control_guidance_start, control_guidance_end, controlnet_conditioning_scale
 
     def context(self):
         if self.config['use_zero_gpu']:
@@ -351,6 +404,7 @@ class kiss3d_wrapper(object):
                                  seed=None,
                                  redux_hparam=None,
                                  save_intermediate_results=True,
+                                 guidance_scale=None,
                                  **kwargs):
         control_mode_dict = {
             'canny': 0,
@@ -371,13 +425,16 @@ class kiss3d_wrapper(object):
         if image is None:
             image = torch.zeros((1, 3, 1024, 2048), dtype=torch.float32, device=flux_device)
 
+        if guidance_scale is None:
+            guidance_scale = self.img2img_defaults.get('guidance_scale', 3.5)
+
         hparam_dict = {
             'prompt': 'A grid of 2x4 multi-view image, elevation 5. White background.',
             'prompt_2': ' '.join(['A grid of 2x4 multi-view image, elevation 5. White background.', prompt]),
             'image': image,
             'strength': strength,
             'num_inference_steps': num_inference_steps,
-            'guidance_scale': 3.5,
+            'guidance_scale': guidance_scale,
             'num_images_per_prompt': 1,
             'width': 2048,
             'height': 1024,
@@ -437,6 +494,8 @@ class kiss3d_wrapper(object):
         """
         image: Tensor of shape (c, h, w), range [0., 1.]
         """
+        image = image.detach().cpu()
+        to_pil = torchvision.transforms.ToPILImage()
         if control_mode in ['tile', 'lq']:
             _, h, w = image.shape
             down_scale = kwargs.get('down_scale', 4)
@@ -454,6 +513,14 @@ class kiss3d_wrapper(object):
                     torchvision.transforms.GaussianBlur(kernel_size, sigma),
                 ])
             preprocessed = blur(image)
+        elif control_mode == 'gray':
+            pil_image = to_pil(image)
+            gray = pil_image.convert('L')
+            if kwargs.get('equalize', False):
+                gray = ImageOps.equalize(gray)
+            if kwargs.get('autocontrast', False):
+                gray = ImageOps.autocontrast(gray)
+            preprocessed = gray.convert('RGB') if kwargs.get('as_rgb', True) else gray
         else:
             raise NotImplementedError(f'Unexpected control mode {control_mode}')
 
@@ -473,6 +540,7 @@ class kiss3d_wrapper(object):
                                       seed=None,
                                       redux_hparam=None,
                                       save_intermediate_results=True,
+                                      guidance_scale=None,
                                       **kwargs):
         
         """
@@ -494,13 +562,16 @@ class kiss3d_wrapper(object):
         generator = torch.Generator(device=flux_device).manual_seed(seed)
 
 
+        if guidance_scale is None:
+            guidance_scale = self.img2img_defaults.get('guidance_scale', 3.5)
+
         hparam_dict = {
             'prompt': 'A grid of 2x4 multi-view image, elevation 5. White background.',
             'prompt_2': ' '.join(['A grid of 2x4 multi-view image, elevation 5. White background.', prompt]),
             'image': image,
             'strength': strength,
             'num_inference_steps': num_inference_steps,
-            'guidance_scale': 3.5,
+            'guidance_scale': guidance_scale,
             'num_images_per_prompt': 1,
             'width': 2048,
             'height': 1024,
@@ -635,44 +706,53 @@ def image2mesh_preprocess(k3d_wrapper, input_image_, seed, use_mv_rgb=True):
 def image2mesh_main(k3d_wrapper, input_image, reference_3d_bundle_image, caption, seed, strength1=0.5, strength2=0.95, enable_redux=True, use_controlnet=True):
     seed_everything(seed)
 
+    img2img_cfg = k3d_wrapper.config.get('img2img_defaults', {})
+    redux_strength = img2img_cfg.get('redux_strength', strength1)
+    primary_strength = img2img_cfg.get('primary_strength', strength2)
+    guidance_scale = img2img_cfg.get('guidance_scale', 3.5)
+
     if enable_redux:
         redux_hparam = {
             'image': k3d_wrapper.to_512_tensor(input_image).unsqueeze(0).clip(0., 1.),
             'prompt_embeds_scale': 1.0,
             'pooled_prompt_embeds_scale': 1.0,
-            'strength': strength1
+            'strength': redux_strength
         }
     else:
         redux_hparam = None
 
+    control_inputs = None
     if use_controlnet:
-        # prepare controlnet condition
-        control_mode = ['tile']
-        control_image = [k3d_wrapper.preprocess_controlnet_cond_image(reference_3d_bundle_image, mode_, down_scale=1, kernel_size=51, sigma=2.0) for mode_ in control_mode]
-        control_guidance_start = [0.0]
-        control_guidance_end = [0.3]
-        controlnet_conditioning_scale = [0.3]
+        control_inputs = k3d_wrapper.prepare_controlnet_conditions(
+            reference_3d_bundle_image, save_intermediate_results=True
+        )
+        if len(control_inputs[0]) == 0:
+            control_inputs = None
+            use_controlnet = False
 
-
+    if use_controlnet:
+        control_mode, control_image, control_guidance_start, control_guidance_end, controlnet_conditioning_scale = control_inputs
         gen_3d_bundle_image, gen_save_path = k3d_wrapper.generate_3d_bundle_image_controlnet(
             prompt=caption,
             image=reference_3d_bundle_image.unsqueeze(0),
-            strength=strength2,
+            strength=primary_strength,
             control_image=control_image, 
             control_mode=control_mode,
             control_guidance_start=control_guidance_start,
             control_guidance_end=control_guidance_end,
             controlnet_conditioning_scale=controlnet_conditioning_scale,
             lora_scale=1.0,
-            redux_hparam=redux_hparam
+            redux_hparam=redux_hparam,
+            guidance_scale=guidance_scale
         )
     else:
         gen_3d_bundle_image, gen_save_path = k3d_wrapper.generate_3d_bundle_image_text(
             prompt=caption,
             image=reference_3d_bundle_image.unsqueeze(0),
-            strength=strength2,
+            strength=primary_strength,
             lora_scale=1.0,
-            redux_hparam=redux_hparam
+            redux_hparam=redux_hparam,
+            guidance_scale=guidance_scale
         )
 
     # recon from 3D Bundle image
@@ -695,44 +775,53 @@ def run_image_to_3d(k3d_wrapper, input_image_path, enable_redux=True, use_mv_rgb
     # breakpoint()
     caption = k3d_wrapper.get_image_caption(input_image)
 
+    img2img_cfg = k3d_wrapper.config.get('img2img_defaults', {})
+    redux_strength = img2img_cfg.get('redux_strength', 0.5)
+    primary_strength = img2img_cfg.get('primary_strength', 0.95)
+    guidance_scale = img2img_cfg.get('guidance_scale', 3.5)
+
     if enable_redux:
         redux_hparam = {
             'image': k3d_wrapper.to_512_tensor(input_image).unsqueeze(0).clip(0., 1.),
             'prompt_embeds_scale': 1.0,
             'pooled_prompt_embeds_scale': 1.0,
-            'strength': 0.5
+            'strength': redux_strength
         }
     else:
         redux_hparam = None
 
+    control_inputs = None
     if use_controlnet:
-        # prepare controlnet condition
-        control_mode = ['tile']
-        control_image = [k3d_wrapper.preprocess_controlnet_cond_image(reference_3d_bundle_image, mode_, down_scale=1, kernel_size=51, sigma=2.0) for mode_ in control_mode]
-        control_guidance_start = [0.0]
-        control_guidance_end = [0.65]
-        controlnet_conditioning_scale = [0.6]
+        control_inputs = k3d_wrapper.prepare_controlnet_conditions(
+            reference_3d_bundle_image, save_intermediate_results=True
+        )
+        if len(control_inputs[0]) == 0:
+            control_inputs = None
+            use_controlnet = False
 
-
+    if use_controlnet:
+        control_mode, control_image, control_guidance_start, control_guidance_end, controlnet_conditioning_scale = control_inputs
         gen_3d_bundle_image, gen_save_path = k3d_wrapper.generate_3d_bundle_image_controlnet(
             prompt=caption,
             image=reference_3d_bundle_image.unsqueeze(0),
-            strength=.95,
+            strength=primary_strength,
             control_image=control_image, 
             control_mode=control_mode,
             control_guidance_start=control_guidance_start,
             control_guidance_end=control_guidance_end,
             controlnet_conditioning_scale=controlnet_conditioning_scale,
             lora_scale=1.0,
-            redux_hparam=redux_hparam
+            redux_hparam=redux_hparam,
+            guidance_scale=guidance_scale
         )
     else:
         gen_3d_bundle_image, gen_save_path = k3d_wrapper.generate_3d_bundle_image_text(
             prompt=caption,
             image=reference_3d_bundle_image.unsqueeze(0),
-            strength=.95,
+            strength=primary_strength,
             lora_scale=1.0,
-            redux_hparam=redux_hparam
+            redux_hparam=redux_hparam,
+            guidance_scale=guidance_scale
         )
 
     # recon from 3D Bundle image
